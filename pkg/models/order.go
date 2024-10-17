@@ -7,9 +7,9 @@ import (
 )
 
 type Order struct {
-	OrderID 		uuid.UUID
-	User_id 		string
-	Order_Status 	string
-	Order_Date 		time.Time
-	Items 			[]OrderItem
+	OrderID     uuid.UUID
+	UserID      string
+	OrderStatus string
+	OrderDate   time.Time
+	Items       []OrderItem
 }

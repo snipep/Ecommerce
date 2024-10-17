@@ -37,6 +37,20 @@ func main()  {
 	repo := repository.NewRepository(db)
 	handlers := handlers.NewHandler(repo)
 
+	//User Shopping Routes
+	r.HandleFunc("/", handlers.ShoppingHomepage).Methods("GET")
+	r.HandleFunc("/shoppingitems", handlers.ShoppingItemView).Methods("GET")
+	r.HandleFunc("/cartitems", handlers.CartView).Methods("GET")
+	r.HandleFunc("/addtocart/{product_id}", handlers.AddToCart).Methods("POST")
+	r.HandleFunc("/gotocart", handlers.ShoppingCartView).Methods("GET")
+	r.HandleFunc("/updateorderitem", handlers.UpdateorderItemQuantity).Methods("PUT")
+	r.HandleFunc("/ordercomplete", handlers.PlaceOrder).Methods("GET")
+	r.HandleFunc("/manageorders", handlers.OrdersPage).Methods("GET")
+	r.HandleFunc("/allorders", handlers.AllordersView).Methods("GET")
+	r.HandleFunc("/orders", handlers.ListOrders).Methods("GET")
+	r.HandleFunc("/orders/{id}", handlers.GetOrder).Methods("GET")
+
+	//Admin Routes
 	//Seeding the dummy data into the database
 	r.HandleFunc("/seed-products", handlers.SeedProduct).Methods("POST")
 	//Handle	 the page showing all the products

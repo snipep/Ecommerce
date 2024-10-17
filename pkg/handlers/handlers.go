@@ -20,7 +20,11 @@ import (
 	"github.com/snipep/Ecommerce-application/pkg/repository"
 )
 
-var tmpl *template.Template
+var (
+	tmpl *template.Template
+	currentCartOrderId uuid.UUID
+	cartItems []models.OrderItem
+)
 
 type Handler struct {
 	Repo *repository.Repoitory
@@ -362,4 +366,311 @@ func (h *Handler) DeleteProduct(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(2 * time.Second)
 
 	tmpl.ExecuteTemplate(w, "allProducts", nil)
+}
+
+func (h *Handler) ShoppingHomepage(w http.ResponseWriter, r *http.Request) {
+	data := struct{
+		OrderItems []models.OrderItem
+	}{
+		OrderItems: cartItems,
+	}
+
+	tmpl.ExecuteTemplate(w, "homepage", data)
+}
+
+func (h *Handler) ShoppingItemView(w http.ResponseWriter, r *http.Request) {
+	// fake latency 
+	time.Sleep(2 * time.Second)
+
+	products, _ := h.Repo.Product.GetProducts("product_image !=''")
+
+	tmpl.ExecuteTemplate(w, "shoppingItems", products)
+}
+
+func (h *Handler) CartView(w http.ResponseWriter, r *http.Request) {
+	data := struct{
+		OrderItems []models.OrderItem
+		Message string
+		AlertType string
+		TotalCost float64
+	}{
+		OrderItems: cartItems,
+		Message: "",
+		AlertType: "",
+		TotalCost: getTotalCartCost(),
+	}
+
+	tmpl.ExecuteTemplate(w, "cartItems", data)
+}
+
+func getTotalCartCost() float64 {
+	totaCost := 0.0
+	for _, item := range cartItems {
+		totaCost += float64(item.Quantity) * item.Product.Price
+	}
+
+	return totaCost
+}
+
+func (h *Handler) AddToCart(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	productID, err := uuid.Parse(vars["product_id"])
+	if err != nil {
+		http.Error(w, "Invalid product ID", http.StatusBadRequest)
+		fmt.Println("failedd bruhh")
+		return 
+	}
+
+	//Generate a new order id for the session if one does not exist
+	if currentCartOrderId == uuid.Nil {
+		currentCartOrderId = uuid.New()
+	}
+
+	//Check if profuct already exist in order items
+	exist := false
+	for _, item := range cartItems{
+		if item.ProductID == productID{
+			exist = true
+			break
+		}
+	}
+
+	// Get the Product 
+	product, _ := h.Repo.Product.GetProductByID(productID)
+
+	cartMessage := ""
+	alertType := ""
+
+	if !exist {
+		//Create a new order item
+		newOrderItem := models.OrderItem{
+			OrderID: currentCartOrderId,
+			ProductID: productID,
+			Quantity: 1,
+			Product: *product,
+		}	 
+
+		// Add new order item to the array 
+		cartItems = append(cartItems, newOrderItem)
+
+		cartMessage = product.ProductName + " successfully added"
+		alertType = "Success"
+	}else {
+		cartMessage = product.ProductName + " already in the cart "
+		alertType = "danger"
+	}
+
+	data := struct {
+		OrderItems []models.OrderItem
+		Message string
+		AlertType string
+		TotalCost float64
+	}{
+		OrderItems: cartItems,
+		Message: cartMessage,
+		AlertType: alertType,
+		TotalCost: getTotalCartCost(),
+	}
+
+	tmpl.ExecuteTemplate(w,  "cartItems", data)
+}
+
+func (h *Handler) ShoppingCartView(w http.ResponseWriter, r *http.Request) {
+	tmpl.ExecuteTemplate(w, "shoppingCart", cartItems)
+}
+
+func (h *Handler) UpdateorderItemQuantity(w http.ResponseWriter, r *http.Request) {
+	//Get profuct ID and sction from URL parameters 
+	cartMessage := ""
+	refreshCartList := false //Signals a refresh of cart items when an item is removed
+
+	productID, err := uuid.Parse(r.URL.Query().Get("product_id"))
+	if err != nil {
+		http.Error(w, "Invalid product ID", http.StatusBadRequest)
+		return 
+	}
+	action := r.URL.Query().Get("action")
+
+	// Find the order item 
+	var itemIndex int
+	for i, item := range cartItems {
+		if item.ProductID == productID {
+			itemIndex = i
+			break
+		}
+	}
+	if itemIndex == -1 {
+		http.Error(w, "Product not found in order", http.StatusNotFound)
+		return 
+	}
+
+	//Update quantitiy based on action
+	switch action {
+	case "add":
+		cartItems[itemIndex].Quantity++
+	case "subtract":
+		cartItems[itemIndex].Quantity--
+		//Remove item if quantity gets to 0
+		if cartItems[itemIndex].Quantity == 0 {
+			cartItems = append(cartItems[:itemIndex], cartItems[itemIndex + 1:]...)
+			refreshCartList = true
+		}
+	case "remove":
+		//Remove item regarless of the quantity
+		cartItems = append(cartItems[ : itemIndex], cartItems[itemIndex + 1 : ]...)
+		refreshCartList = true
+	default:
+		/* http.Error(w, "Invaliud action", http.StatusBadRequest)
+		return*/
+		cartMessage = "Invalid Action"
+	}
+
+	//Respond to teh request
+	//fmt.Fprintf(w, "Order item updated")
+	data := struct {
+		OrderItems 		[]models.OrderItem
+		Message			string
+		AlertType 		string
+		TotalCost 		float64
+		Action 			string
+		RefreshCartItems bool
+	}{
+		OrderItems: cartItems,
+		Message: cartMessage,
+		AlertType: "info",
+		TotalCost: getTotalCartCost(),
+		Action: action,
+		RefreshCartItems: refreshCartList,
+	}
+
+	tmpl.ExecuteTemplate(w, "updateShoppingCart", data)
+}
+
+func (h *Handler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
+	for i := range cartItems{
+		cartItems[i].Cost = float64(cartItems[i].Quantity) * cartItems[i].Product.Price
+	}
+
+	err := h.Repo.Order.PlaceOrderWithItems(cartItems)
+	if err != nil{
+		http.Error(w, "Error Placing Order " + err.Error(), http.StatusBadRequest)
+		return 
+	}
+
+	displayItems := cartItems
+	totalCost := getTotalCartCost()
+
+	//Empty the cart items
+	cartItems = []models.OrderItem{}
+	currentCartOrderId = uuid.Nil
+
+	data := struct {
+		OrderItems []models.OrderItem
+		TotalCost float64
+	}{
+		OrderItems: displayItems,
+		TotalCost: totalCost,
+	}
+
+	tmpl.ExecuteTemplate(w, "orderComplete", data)
+}
+
+func (h *Handler) OrdersPage(w http.ResponseWriter, r *http.Request) {
+	tmpl.ExecuteTemplate(w, "orders", nil)
+}
+
+func (h *Handler) AllordersView(w http.ResponseWriter, r *http.Request) {
+	tmpl.ExecuteTemplate(w, "allOrders", nil)
+}
+
+func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1{
+		page = 1
+	}
+	
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		limit = 10 //default
+	}
+	
+	offset := (page - 1) * limit
+
+	orders, err := h.Repo.Order.ListOrders(limit, offset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return 
+	}
+	totalOrders, err := h.Repo.Order.GetToatlOrdersCount()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return 
+	}
+
+
+	totalPages := int(math.Ceil(float64(totalOrders) / float64(limit)))
+	previousPage := page - 1
+	nextPage := page + 1
+	pageButtonsRange := makeRange(1, totalPages)
+
+	data := struct {
+		Orders           []models.Order
+		CurrentPage      int
+		TotalPages       int
+		Limit            int
+		PreviousPage     int
+		NextPage         int
+		PageButtonsRange []int
+	}{
+		Orders:           orders,
+		CurrentPage:      page,
+		TotalPages:       totalPages,
+		Limit:            limit,
+		PreviousPage:     previousPage,
+		NextPage:         nextPage,
+		PageButtonsRange: pageButtonsRange,
+	}
+
+	// Fake latency
+	// time.Sleep(2 * time.Second) 
+
+	tmpl.ExecuteTemplate(w, "orderRows", data)
+}
+
+func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	orderID, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid order ID", http.StatusBadRequest)
+		return
+	}
+
+	order, err := h.Repo.Order.GetOrderWithProducts(orderID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return 
+	}
+	
+	totalCost := 0.0 
+	for _, item := range order.Items {
+		totalCost += float64(item.Quantity) * item.Product.Price
+	}
+
+	order.OrderStatus = strings.ToUpper(order.OrderStatus)
+
+	data := struct {
+		Order models.Order
+		TotalCost float64
+	}{
+		Order: *order,
+		TotalCost: totalCost,
+	}
+
+	tmpl.ExecuteTemplate(w, "viewOrder", data)
+
+
+
 }
